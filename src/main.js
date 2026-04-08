@@ -3,382 +3,386 @@ import * as THREE from 'three'
 import { EffectComposer, RenderPass, EffectPass, BloomEffect, ChromaticAberrationEffect, VignetteEffect } from 'postprocessing'
 
 // ============================================
-// RENDERER
+// RENDERER — dark, moody
 // ============================================
 const canvas = document.getElementById('c')
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true })
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
 renderer.setSize(window.innerWidth, window.innerHeight)
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
 renderer.toneMapping = THREE.ACESFilmicToneMapping
-renderer.toneMappingExposure = 1.2
+renderer.toneMappingExposure = 0.8
 
 const scene = new THREE.Scene()
-scene.background = new THREE.Color(0x000000)
+scene.background = new THREE.Color(0x020202)
 
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100)
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 100)
 camera.position.z = 3.5
 
 // ============================================
-// AUDIO ANALYZER
+// DITHER MODE — bread / flower / pixel
 // ============================================
-let audioCtx, analyser, freqData, audioLevel = 0, bassLevel = 0, trebleLevel = 0
+let ditherMode = 'bread' // 'bread' | 'flower' | 'pixel'
 
-function initAudio(useMic = false) {
+// Generate dither pattern textures procedurally
+function createDitherTexture(mode) {
+  const size = 64
+  const c = document.createElement('canvas')
+  c.width = size; c.height = size
+  const ctx = c.getContext('2d')
+  ctx.fillStyle = '#000'
+  ctx.fillRect(0, 0, size, size)
+  ctx.fillStyle = '#fff'
+
+  if (mode === 'bread') {
+    // Tiny bread shapes in a grid
+    for (let y = 0; y < size; y += 8) {
+      for (let x = 0; x < size; x += 8) {
+        ctx.beginPath()
+        // Bread loaf shape
+        ctx.ellipse(x + 4, y + 5, 3, 2, 0, 0, Math.PI * 2)
+        ctx.fill()
+        // Top bump
+        ctx.beginPath()
+        ctx.ellipse(x + 4, y + 3, 2, 1.5, 0, Math.PI, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+  } else if (mode === 'flower') {
+    // Tiny flower shapes
+    for (let y = 0; y < size; y += 8) {
+      for (let x = 0; x < size; x += 8) {
+        const cx = x + 4, cy = y + 4
+        // Petals
+        for (let p = 0; p < 5; p++) {
+          const angle = (p / 5) * Math.PI * 2
+          ctx.beginPath()
+          ctx.ellipse(cx + Math.cos(angle) * 2, cy + Math.sin(angle) * 2, 1.5, 1, angle, 0, Math.PI * 2)
+          ctx.fill()
+        }
+        // Center
+        ctx.beginPath()
+        ctx.arc(cx, cy, 1, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+  } else {
+    // Standard pixel dither (Bayer-like dots)
+    for (let y = 0; y < size; y += 4) {
+      for (let x = 0; x < size; x += 4) {
+        ctx.fillRect(x + 1, y + 1, 2, 2)
+      }
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(c)
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+  tex.minFilter = THREE.NearestFilter
+  tex.magFilter = THREE.NearestFilter
+  return tex
+}
+
+let ditherTexture = createDitherTexture('bread')
+
+// Mode buttons
+document.querySelectorAll('.mode-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.mode-btn').forEach((b) => b.classList.remove('active'))
+    btn.classList.add('active')
+    ditherMode = btn.id.replace('btn-', '')
+    ditherTexture = createDitherTexture(ditherMode)
+    icoMaterial.uniforms.uDitherTex.value = ditherTexture
+  })
+})
+
+// ============================================
+// AUDIO — ambient musical drone (not annoying)
+// ============================================
+let audioCtx, analyser, freqData
+let audioLevel = 0, bassLevel = 0, trebleLevel = 0
+
+function initAudio() {
   if (audioCtx) return
   audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+  if (audioCtx.state === 'suspended') audioCtx.resume()
+
   analyser = audioCtx.createAnalyser()
-  analyser.fftSize = 512
-  analyser.smoothingTimeConstant = 0.8
+  analyser.fftSize = 256
+  analyser.smoothingTimeConstant = 0.85
   freqData = new Uint8Array(analyser.frequencyBinCount)
 
-  if (useMic) {
-    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-      const src = audioCtx.createMediaStreamSource(stream)
-      src.connect(analyser)
-      document.getElementById('btn-mic').classList.add('active')
-    })
-  } else {
-    // Generate procedural ambient drone
-    const osc1 = audioCtx.createOscillator()
-    osc1.type = 'sine'
-    osc1.frequency.value = 60
-    const osc2 = audioCtx.createOscillator()
-    osc2.type = 'triangle'
-    osc2.frequency.value = 90
-    const osc3 = audioCtx.createOscillator()
-    osc3.type = 'sawtooth'
-    osc3.frequency.value = 45
+  const master = audioCtx.createGain()
+  master.gain.value = 0.25
+  master.connect(audioCtx.destination)
 
+  // Musical pad: Am chord (A2-C3-E3-A3) — dark, moody
+  const notes = [110, 130.81, 164.81, 220]
+  notes.forEach((freq, i) => {
+    const osc = audioCtx.createOscillator()
+    osc.type = i === 0 ? 'sine' : i === 1 ? 'triangle' : 'sine'
+    osc.frequency.value = freq
+
+    // Slow detune for richness
     const lfo = audioCtx.createOscillator()
     lfo.type = 'sine'
-    lfo.frequency.value = 0.2
+    lfo.frequency.value = 0.1 + i * 0.05
     const lfoGain = audioCtx.createGain()
-    lfoGain.gain.value = 15
-    lfo.connect(lfoGain).connect(osc1.frequency)
-    lfo.connect(lfoGain).connect(osc2.frequency)
+    lfoGain.gain.value = 1.5
+    lfo.connect(lfoGain).connect(osc.detune)
     lfo.start()
+
+    const gain = audioCtx.createGain()
+    gain.gain.value = i === 0 ? 0.15 : 0.08
 
     const filter = audioCtx.createBiquadFilter()
     filter.type = 'lowpass'
-    filter.frequency.value = 200
-    filter.Q.value = 8
+    filter.frequency.value = 300 + i * 50
+    filter.Q.value = 2
 
-    const gain = audioCtx.createGain()
-    gain.gain.value = 0.3
+    osc.connect(filter).connect(gain).connect(analyser)
+    gain.connect(master)
+    osc.start()
+  })
 
-    ;[osc1, osc2, osc3].forEach((o) => {
-      o.connect(filter)
-      o.start()
-    })
-    filter.connect(gain).connect(analyser)
-    analyser.connect(audioCtx.destination)
+  // Sub bass pulse
+  const sub = audioCtx.createOscillator()
+  sub.type = 'sine'
+  sub.frequency.value = 55
+  const subGain = audioCtx.createGain()
+  subGain.gain.value = 0.12
+  const subLfo = audioCtx.createOscillator()
+  subLfo.type = 'sine'
+  subLfo.frequency.value = 0.3
+  const subLfoGain = audioCtx.createGain()
+  subLfoGain.gain.value = 0.08
+  subLfo.connect(subLfoGain).connect(subGain.gain)
+  subLfo.start()
+  sub.connect(subGain).connect(analyser)
+  subGain.connect(master)
+  sub.start()
 
-    document.getElementById('btn-audio').classList.add('active')
-  }
+  // Filtered noise texture
+  const bufSize = audioCtx.sampleRate * 4
+  const nBuf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate)
+  const d = nBuf.getChannelData(0)
+  for (let i = 0; i < bufSize; i++) d[i] = Math.random() * 2 - 1
+  const noise = audioCtx.createBufferSource()
+  noise.buffer = nBuf; noise.loop = true
+  const nBP = audioCtx.createBiquadFilter()
+  nBP.type = 'bandpass'; nBP.frequency.value = 400; nBP.Q.value = 8
+  const nGain = audioCtx.createGain()
+  nGain.gain.value = 0.03
+  noise.connect(nBP).connect(nGain).connect(analyser)
+  nGain.connect(master)
+  noise.start()
 }
 
 function updateAudio() {
   if (!analyser) return
   analyser.getByteFrequencyData(freqData)
-
-  let sum = 0, bass = 0, treble = 0
+  let sum = 0, bass = 0, treb = 0
   const len = freqData.length
   for (let i = 0; i < len; i++) {
     sum += freqData[i]
     if (i < len * 0.25) bass += freqData[i]
-    if (i > len * 0.75) treble += freqData[i]
+    if (i > len * 0.75) treb += freqData[i]
   }
   audioLevel = (sum / len) / 255
   bassLevel = (bass / (len * 0.25)) / 255
-  trebleLevel = (treble / (len * 0.25)) / 255
+  trebleLevel = (treb / (len * 0.25)) / 255
 }
 
-// Buttons
-document.getElementById('btn-mic').addEventListener('click', () => initAudio(true))
-document.getElementById('btn-audio').addEventListener('click', () => initAudio(false))
+// ============================================
+// ENTER OVERLAY
+// ============================================
+const overlay = document.getElementById('enter-overlay')
+overlay.addEventListener('click', () => {
+  overlay.classList.add('hidden')
+  initAudio()
+})
 
 // ============================================
-// FLUID SIMULATION (GPU via render targets)
+// FLUID SIMULATION
 // ============================================
-const FLUID_SIZE = 256
+const FS = 256
 const fluidScene = new THREE.Scene()
-const fluidCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
-
-// Ping-pong render targets
+const fluidCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
 const rtOpts = { format: THREE.RGBAFormat, type: THREE.FloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter }
-let rtA = new THREE.WebGLRenderTarget(FLUID_SIZE, FLUID_SIZE, rtOpts)
-let rtB = new THREE.WebGLRenderTarget(FLUID_SIZE, FLUID_SIZE, rtOpts)
+let rtA = new THREE.WebGLRenderTarget(FS, FS, rtOpts)
+let rtB = new THREE.WebGLRenderTarget(FS, FS, rtOpts)
 
-const fluidMaterial = new THREE.ShaderMaterial({
+const fluidMat = new THREE.ShaderMaterial({
   uniforms: {
     uPrev: { value: null },
     uMouse: { value: new THREE.Vector2(0.5, 0.5) },
     uMousePrev: { value: new THREE.Vector2(0.5, 0.5) },
-    uMouseDown: { value: 0.0 },
+    uClick: { value: 0 },
     uDt: { value: 0.016 },
-    uDissipation: { value: 0.97 },
-    uAudioLevel: { value: 0.0 },
-    uBassLevel: { value: 0.0 },
-    uResolution: { value: new THREE.Vector2(FLUID_SIZE, FLUID_SIZE) },
+    uAudio: { value: 0 },
+    uBass: { value: 0 },
+    uRes: { value: new THREE.Vector2(FS, FS) },
   },
-  vertexShader: `
-    varying vec2 vUv;
-    void main() { vUv = uv; gl_Position = vec4(position, 1.0); }
-  `,
+  vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position, 1.0); }`,
   fragmentShader: `
     precision highp float;
     uniform sampler2D uPrev;
-    uniform vec2 uMouse;
-    uniform vec2 uMousePrev;
-    uniform float uMouseDown;
-    uniform float uDt;
-    uniform float uDissipation;
-    uniform float uAudioLevel;
-    uniform float uBassLevel;
-    uniform vec2 uResolution;
+    uniform vec2 uMouse, uMousePrev, uRes;
+    uniform float uClick, uDt, uAudio, uBass;
     varying vec2 vUv;
 
     vec2 hash(vec2 p) {
-      p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
-      return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);
+      p = vec2(dot(p,vec2(127.1,311.7)), dot(p,vec2(269.5,183.3)));
+      return -1.0+2.0*fract(sin(p)*43758.5453);
     }
-
     float noise(vec2 p) {
-      vec2 i = floor(p), f = fract(p);
-      vec2 u = f * f * (3.0 - 2.0 * f);
-      return mix(mix(dot(hash(i), f), dot(hash(i + vec2(1,0)), f - vec2(1,0)), u.x),
-                 mix(dot(hash(i + vec2(0,1)), f - vec2(0,1)), dot(hash(i + vec2(1,1)), f - vec2(1,1)), u.x), u.y);
+      vec2 i=floor(p), f=fract(p), u=f*f*(3.0-2.0*f);
+      return mix(mix(dot(hash(i),f),dot(hash(i+vec2(1,0)),f-vec2(1,0)),u.x),
+                 mix(dot(hash(i+vec2(0,1)),f-vec2(0,1)),dot(hash(i+vec2(1,1)),f-vec2(1,1)),u.x),u.y);
     }
 
     void main() {
-      vec2 texel = 1.0 / uResolution;
+      vec2 tx = 1.0/uRes;
+      vec4 c = texture2D(uPrev, vUv);
+      vec4 l = texture2D(uPrev, vUv-vec2(tx.x,0));
+      vec4 r = texture2D(uPrev, vUv+vec2(tx.x,0));
+      vec4 u = texture2D(uPrev, vUv+vec2(0,tx.y));
+      vec4 d = texture2D(uPrev, vUv-vec2(0,tx.y));
 
-      // Sample neighbors for advection
-      vec4 prev = texture2D(uPrev, vUv);
-      vec4 left = texture2D(uPrev, vUv - vec2(texel.x, 0.0));
-      vec4 right = texture2D(uPrev, vUv + vec2(texel.x, 0.0));
-      vec4 up = texture2D(uPrev, vUv + vec2(0.0, texel.y));
-      vec4 down = texture2D(uPrev, vUv - vec2(0.0, texel.y));
+      vec2 vel = vec2(r.x-l.x, u.x-d.x)*0.5;
+      vec2 advUv = vUv - vel*uDt*6.0;
+      vec4 adv = texture2D(uPrev, advUv);
 
-      // Velocity from pressure differences
-      vec2 velocity = vec2(right.x - left.x, up.x - down.x) * 0.5;
-
-      // Advect: sample from where the fluid came from
-      vec2 advectedUv = vUv - velocity * uDt * 8.0;
-      vec4 advected = texture2D(uPrev, advectedUv);
-
-      // Mouse force — splat
-      vec2 mouseDelta = uMouse - uMousePrev;
-      float mouseForce = length(mouseDelta) * 20.0;
+      vec2 mDelta = uMouse - uMousePrev;
+      float mForce = length(mDelta)*15.0;
       float dist = distance(vUv, uMouse);
-      float splatRadius = 0.05 + uBassLevel * 0.03;
-      float splat = exp(-dist * dist / (splatRadius * splatRadius)) * mouseForce;
-      splat += exp(-dist * dist / (0.02 * 0.02)) * uMouseDown * 2.0; // click impulse
+      float splat = exp(-dist*dist/(0.003+uBass*0.002))*mForce;
+      splat += exp(-dist*dist/0.001)*uClick*3.0;
 
-      // Audio-reactive turbulence
-      float turb = noise(vUv * 8.0 + prev.xy * 2.0) * uAudioLevel * 0.3;
+      float turb = noise(vUv*6.0+c.xy*2.0)*uAudio*0.2;
 
-      // Combine
-      vec4 result = advected * uDissipation;
-      result.xy += mouseDelta * splat * 3.0;
-      result.z += splat * 0.5 + turb;
-      result.w = max(result.z, result.w * 0.98); // peak tracker
+      vec4 res = adv*0.965;
+      res.xy += mDelta*splat*2.0;
+      res.z += splat*0.4 + turb;
+      res.w = max(res.z, res.w*0.97);
 
-      gl_FragColor = result;
+      gl_FragColor = res;
     }
   `,
 })
-
-const fluidQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), fluidMaterial)
-fluidScene.add(fluidQuad)
+fluidScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), fluidMat))
 
 // ============================================
-// MAIN GEOMETRY — Icosahedron with displacement
+// MAIN SPHERE — dark moody with custom dither
 // ============================================
-const icoGeo = new THREE.IcosahedronGeometry(1.5, 64)
+const geo = new THREE.IcosahedronGeometry(1.4, 80)
 
 const icoMaterial = new THREE.ShaderMaterial({
   uniforms: {
     uTime: { value: 0 },
     uFluid: { value: null },
-    uAudioLevel: { value: 0 },
-    uBassLevel: { value: 0 },
-    uTrebleLevel: { value: 0 },
-    uColor1: { value: new THREE.Color(0x00ffcc) },
-    uColor2: { value: new THREE.Color(0x6600ff) },
-    uColor3: { value: new THREE.Color(0xff0066) },
+    uDitherTex: { value: ditherTexture },
+    uAudio: { value: 0 },
+    uBass: { value: 0 },
+    uTreble: { value: 0 },
   },
   vertexShader: `
-    uniform float uTime;
+    uniform float uTime, uAudio, uBass;
     uniform sampler2D uFluid;
-    uniform float uAudioLevel;
-    uniform float uBassLevel;
     varying vec2 vUv;
-    varying vec3 vNormal;
-    varying vec3 vPosition;
-    varying float vDisplacement;
+    varying vec3 vNorm, vPos;
+    varying float vDisp;
 
-    // Simplex-ish noise
-    vec3 mod289(vec3 x) { return x - floor(x * (1.0/289.0)) * 289.0; }
-    vec4 mod289(vec4 x) { return x - floor(x * (1.0/289.0)) * 289.0; }
-    vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
-    vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
-
-    float snoise(vec3 v) {
-      const vec2 C = vec2(1.0/6.0, 1.0/3.0);
-      const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
-      vec3 i = floor(v + dot(v, C.yyy));
-      vec3 x0 = v - i + dot(i, C.xxx);
-      vec3 g = step(x0.yzx, x0.xyz);
-      vec3 l = 1.0 - g;
-      vec3 i1 = min(g.xyz, l.zxy);
-      vec3 i2 = max(g.xyz, l.zxy);
-      vec3 x1 = x0 - i1 + C.xxx;
-      vec3 x2 = x0 - i2 + C.yyy;
-      vec3 x3 = x0 - D.yyy;
-      i = mod289(i);
-      vec4 p = permute(permute(permute(
-        i.z + vec4(0.0, i1.z, i2.z, 1.0))
-        + i.y + vec4(0.0, i1.y, i2.y, 1.0))
-        + i.x + vec4(0.0, i1.x, i2.x, 1.0));
-      float n_ = 0.142857142857;
-      vec3 ns = n_ * D.wyz - D.xzx;
-      vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
-      vec4 x_ = floor(j * ns.z);
-      vec4 y_ = floor(j - 7.0 * x_);
-      vec4 x = x_ * ns.x + ns.yyyy;
-      vec4 y = y_ * ns.x + ns.yyyy;
-      vec4 h = 1.0 - abs(x) - abs(y);
-      vec4 b0 = vec4(x.xy, y.xy);
-      vec4 b1 = vec4(x.zw, y.zw);
-      vec4 s0 = floor(b0)*2.0 + 1.0;
-      vec4 s1 = floor(b1)*2.0 + 1.0;
-      vec4 sh = -step(h, vec4(0.0));
-      vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
-      vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
-      vec3 p0 = vec3(a0.xy, h.x);
-      vec3 p1 = vec3(a0.zw, h.y);
-      vec3 p2 = vec3(a1.xy, h.z);
-      vec3 p3 = vec3(a1.zw, h.w);
-      vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
-      p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
-      vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
-      m = m * m;
-      return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+    vec3 mod289(vec3 x){return x-floor(x*(1.0/289.0))*289.0;}
+    vec4 mod289(vec4 x){return x-floor(x*(1.0/289.0))*289.0;}
+    vec4 permute(vec4 x){return mod289(((x*34.0)+1.0)*x);}
+    vec4 taylorInvSqrt(vec4 r){return 1.79284291400159-0.85373472095314*r;}
+    float snoise(vec3 v){
+      const vec2 C=vec2(1.0/6.0,1.0/3.0);const vec4 D=vec4(0,0.5,1,2);
+      vec3 i=floor(v+dot(v,C.yyy));vec3 x0=v-i+dot(i,C.xxx);
+      vec3 g=step(x0.yzx,x0.xyz);vec3 l=1.0-g;
+      vec3 i1=min(g,l.zxy);vec3 i2=max(g,l.zxy);
+      vec3 x1=x0-i1+C.xxx;vec3 x2=x0-i2+C.yyy;vec3 x3=x0-D.yyy;
+      i=mod289(i);
+      vec4 p=permute(permute(permute(i.z+vec4(0,i1.z,i2.z,1))+i.y+vec4(0,i1.y,i2.y,1))+i.x+vec4(0,i1.x,i2.x,1));
+      float n_=0.142857142857;vec3 ns=n_*D.wyz-D.xzx;
+      vec4 j=p-49.0*floor(p*ns.z*ns.z);
+      vec4 x_=floor(j*ns.z);vec4 y_=floor(j-7.0*x_);
+      vec4 x=x_*ns.x+ns.yyyy;vec4 y=y_*ns.x+ns.yyyy;
+      vec4 h=1.0-abs(x)-abs(y);
+      vec4 b0=vec4(x.xy,y.xy);vec4 b1=vec4(x.zw,y.zw);
+      vec4 s0=floor(b0)*2.0+1.0;vec4 s1=floor(b1)*2.0+1.0;
+      vec4 sh=-step(h,vec4(0));
+      vec4 a0=b0.xzyw+s0.xzyw*sh.xxyy;vec4 a1=b1.xzyw+s1.xzyw*sh.zzww;
+      vec3 p0=vec3(a0.xy,h.x);vec3 p1=vec3(a0.zw,h.y);
+      vec3 p2=vec3(a1.xy,h.z);vec3 p3=vec3(a1.zw,h.w);
+      vec4 norm=taylorInvSqrt(vec4(dot(p0,p0),dot(p1,p1),dot(p2,p2),dot(p3,p3)));
+      p0*=norm.x;p1*=norm.y;p2*=norm.z;p3*=norm.w;
+      vec4 m=max(0.6-vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)),0.0);
+      m=m*m;return 42.0*dot(m*m,vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));
     }
 
-    void main() {
-      vUv = uv;
-      vNormal = normal;
-
-      // Multi-octave noise displacement
-      float t = uTime * 0.3;
-      vec3 noisePos = position * 1.5 + t;
-      float n1 = snoise(noisePos) * 0.4;
-      float n2 = snoise(noisePos * 2.0 + 100.0) * 0.2;
-      float n3 = snoise(noisePos * 4.0 + 200.0) * 0.1;
-
-      float displacement = (n1 + n2 + n3);
-
-      // Audio boost
-      displacement *= 1.0 + uBassLevel * 1.5;
-      displacement += uAudioLevel * 0.15;
-
-      // Sample fluid for extra displacement
-      vec2 fluidUv = uv;
-      vec4 fluid = texture2D(uFluid, fluidUv);
-      displacement += fluid.z * 0.3;
-
-      vDisplacement = displacement;
-      vec3 newPos = position + normal * displacement;
-      vPosition = newPos;
-
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(newPos, 1.0);
+    void main(){
+      vUv=uv; vNorm=normal;
+      float t=uTime*0.25;
+      vec3 np=position*1.2+t;
+      float d=snoise(np)*0.35+snoise(np*2.0+100.0)*0.18+snoise(np*4.0+200.0)*0.09;
+      d*=1.0+uBass*1.8;
+      d+=uAudio*0.12;
+      vec4 fl=texture2D(uFluid,uv);
+      d+=fl.z*0.25;
+      vDisp=d;
+      vec3 p=position+normal*d;
+      vPos=p;
+      gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.0);
     }
   `,
   fragmentShader: `
     precision highp float;
-    uniform float uTime;
-    uniform float uAudioLevel;
-    uniform float uTrebleLevel;
-    uniform vec3 uColor1;
-    uniform vec3 uColor2;
-    uniform vec3 uColor3;
+    uniform float uTime, uAudio, uTreble;
+    uniform sampler2D uDitherTex;
     varying vec2 vUv;
-    varying vec3 vNormal;
-    varying vec3 vPosition;
-    varying float vDisplacement;
+    varying vec3 vNorm, vPos;
+    varying float vDisp;
 
-    // Bayer 4x4 dithering matrix
-    float bayer4(vec2 pos) {
-      int x = int(mod(pos.x, 4.0));
-      int y = int(mod(pos.y, 4.0));
-      int index = x + y * 4;
-      // Bayer matrix values
-      if (index == 0) return 0.0/16.0;
-      if (index == 1) return 8.0/16.0;
-      if (index == 2) return 2.0/16.0;
-      if (index == 3) return 10.0/16.0;
-      if (index == 4) return 12.0/16.0;
-      if (index == 5) return 4.0/16.0;
-      if (index == 6) return 14.0/16.0;
-      if (index == 7) return 6.0/16.0;
-      if (index == 8) return 3.0/16.0;
-      if (index == 9) return 11.0/16.0;
-      if (index == 10) return 1.0/16.0;
-      if (index == 11) return 9.0/16.0;
-      if (index == 12) return 15.0/16.0;
-      if (index == 13) return 7.0/16.0;
-      if (index == 14) return 13.0/16.0;
-      if (index == 15) return 5.0/16.0;
-      return 0.0;
-    }
+    void main(){
+      vec3 viewDir=normalize(cameraPosition-vPos);
+      float fresnel=pow(1.0-max(dot(viewDir,vNorm),0.0),3.0);
 
-    void main() {
-      // Fresnel
-      vec3 viewDir = normalize(cameraPosition - vPosition);
-      float fresnel = pow(1.0 - max(dot(viewDir, vNormal), 0.0), 3.0);
+      // Monochrome color from displacement
+      float brightness=0.15+abs(vDisp)*1.8;
+      brightness+=fresnel*0.4;
+      brightness+=uAudio*0.15;
 
-      // Color based on displacement + fresnel
-      float t = vDisplacement * 2.0 + 0.5;
-      vec3 col = mix(uColor1, uColor2, smoothstep(0.0, 0.5, t));
-      col = mix(col, uColor3, smoothstep(0.5, 1.0, t));
+      // Clamp to dark range
+      brightness=clamp(brightness, 0.0, 1.0);
 
-      // Audio color shift
-      col += vec3(uTrebleLevel * 0.3, 0.0, uAudioLevel * 0.2);
+      // === CUSTOM SHAPE DITHERING ===
+      vec2 screenUv=gl_FragCoord.xy/8.0; // tile size
+      float ditherSample=texture2D(uDitherTex, screenUv).r;
 
-      // Emissive glow from displacement peaks
-      float emission = smoothstep(0.2, 0.5, abs(vDisplacement)) * 1.5;
-      col *= 1.0 + emission;
+      // Threshold with dither pattern
+      float dithered=step(ditherSample*0.8, brightness);
 
-      // Fresnel rim
-      col += vec3(0.3, 0.5, 1.0) * fresnel * 0.8;
+      // Tint: subtle cool/warm based on displacement
+      vec3 coolColor=vec3(0.6, 0.7, 0.9); // blue-white
+      vec3 warmColor=vec3(0.9, 0.75, 0.6); // warm cream
+      vec3 tint=mix(coolColor, warmColor, smoothstep(-0.2, 0.3, vDisp));
 
-      // === BAYER DITHERING ===
-      vec2 screenPos = gl_FragCoord.xy;
-      float ditherGrid = 3.0 + uAudioLevel * 3.0; // audio-reactive grid size
-      float bayerValue = bayer4(floor(screenPos / ditherGrid));
+      vec3 col=tint*dithered;
 
-      // Apply dithering per channel
-      float ditherStrength = 0.15 + uAudioLevel * 0.1;
-      col.r = step(bayerValue, col.r + ditherStrength * (col.r - 0.5));
-      col.g = step(bayerValue, col.g + ditherStrength * (col.g - 0.5));
-      col.b = step(bayerValue, col.b + ditherStrength * (col.b - 0.5));
+      // Emission for bright peaks
+      float emission=smoothstep(0.3, 0.6, abs(vDisp));
+      col+=tint*emission*0.3;
 
-      // Keep some smooth areas (selective dither)
-      float smoothMask = smoothstep(0.6, 0.8, fresnel);
-      vec3 smoothCol = mix(uColor1, uColor2, t) * (1.0 + emission);
-      col = mix(col, smoothCol, smoothMask * 0.5);
+      // Fresnel rim glow
+      col+=vec3(0.4, 0.5, 0.8)*fresnel*0.5*dithered;
 
-      gl_FragColor = vec4(col, 1.0);
+      gl_FragColor=vec4(col, 1.0);
     }
   `,
-  transparent: false,
-  side: THREE.FrontSide,
 })
 
-const icoMesh = new THREE.Mesh(icoGeo, icoMaterial)
-scene.add(icoMesh)
+const mesh = new THREE.Mesh(geo, icoMaterial)
+scene.add(mesh)
 
 // ============================================
 // POST-PROCESSING
@@ -387,91 +391,36 @@ const composer = new EffectComposer(renderer)
 composer.addPass(new RenderPass(scene, camera))
 
 const bloom = new BloomEffect({
-  intensity: 1.5,
-  luminanceThreshold: 0.2,
-  luminanceSmoothing: 0.5,
+  intensity: 1.8,
+  luminanceThreshold: 0.15,
+  luminanceSmoothing: 0.4,
   mipmapBlur: true,
 })
-
 const chromatic = new ChromaticAberrationEffect({
   offset: new THREE.Vector2(0.001, 0.001),
   radialModulation: true,
   modulationOffset: 0.3,
 })
-
-const vignette = new VignetteEffect({ darkness: 0.6, offset: 0.3 })
+const vignette = new VignetteEffect({ darkness: 0.7, offset: 0.25 })
 
 composer.addPass(new EffectPass(camera, bloom, chromatic, vignette))
-
-// ============================================
-// DITHER POST-PROCESSING PASS
-// ============================================
-// Additional dithering on final output
-const ditherPostMaterial = new THREE.ShaderMaterial({
-  uniforms: {
-    tDiffuse: { value: null },
-    uResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
-    uDitherScale: { value: 2.0 },
-    uAudioLevel: { value: 0 },
-  },
-  vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position, 1.0); }`,
-  fragmentShader: `
-    precision highp float;
-    uniform sampler2D tDiffuse;
-    uniform vec2 uResolution;
-    uniform float uDitherScale;
-    uniform float uAudioLevel;
-    varying vec2 vUv;
-
-    float bayer8(vec2 pos) {
-      vec2 p = mod(pos, 8.0);
-      float x = p.x, y = p.y;
-      // 8x8 Bayer pattern approximation
-      return fract(
-        (floor(x/4.0) + floor(y/2.0)) * 0.5 +
-        (floor(x/2.0) + floor(y)) * 0.25 +
-        (x + floor(y/4.0)) * 0.125
-      );
-    }
-
-    void main() {
-      vec4 color = texture2D(tDiffuse, vUv);
-      vec2 screenPos = vUv * uResolution;
-
-      float scale = uDitherScale + uAudioLevel * 2.0;
-      float bayer = bayer8(floor(screenPos / scale));
-
-      // Subtle post-dithering (don't overdo it)
-      float strength = 0.08 + uAudioLevel * 0.05;
-      color.rgb += (bayer - 0.5) * strength;
-
-      gl_FragColor = color;
-    }
-  `,
-})
 
 // ============================================
 // MOUSE
 // ============================================
 const mouse = new THREE.Vector2(0.5, 0.5)
 const prevMouse = new THREE.Vector2(0.5, 0.5)
-let mouseDown = 0
+let clickImpulse = 0
 
 document.addEventListener('mousemove', (e) => {
   prevMouse.copy(mouse)
-  mouse.set(e.clientX / window.innerWidth, 1.0 - e.clientY / window.innerHeight)
+  mouse.set(e.clientX / window.innerWidth, 1 - e.clientY / window.innerHeight)
 })
-
-document.addEventListener('mousedown', () => { mouseDown = 1.0 })
-document.addEventListener('mouseup', () => { mouseDown = 0.0 })
-
-// Click = impulse
-document.addEventListener('click', () => {
-  if (!audioCtx) initAudio(false)
-})
+document.addEventListener('mousedown', () => { clickImpulse = 1 })
+document.addEventListener('mouseup', () => { clickImpulse = 0 })
 
 // ============================================
-// ANIMATION
+// RENDER
 // ============================================
 const clock = new THREE.Clock()
 
@@ -482,45 +431,36 @@ function animate() {
 
   updateAudio()
 
-  // --- FLUID SIMULATION (ping-pong) ---
-  fluidMaterial.uniforms.uPrev.value = rtA.texture
-  fluidMaterial.uniforms.uMouse.value.copy(mouse)
-  fluidMaterial.uniforms.uMousePrev.value.copy(prevMouse)
-  fluidMaterial.uniforms.uMouseDown.value = mouseDown
-  fluidMaterial.uniforms.uDt.value = dt
-  fluidMaterial.uniforms.uAudioLevel.value = audioLevel
-  fluidMaterial.uniforms.uBassLevel.value = bassLevel
-
+  // Fluid
+  fluidMat.uniforms.uPrev.value = rtA.texture
+  fluidMat.uniforms.uMouse.value.copy(mouse)
+  fluidMat.uniforms.uMousePrev.value.copy(prevMouse)
+  fluidMat.uniforms.uClick.value = clickImpulse
+  fluidMat.uniforms.uDt.value = dt
+  fluidMat.uniforms.uAudio.value = audioLevel
+  fluidMat.uniforms.uBass.value = bassLevel
   renderer.setRenderTarget(rtB)
-  renderer.render(fluidScene, fluidCamera)
+  renderer.render(fluidScene, fluidCam)
   renderer.setRenderTarget(null)
-
-  // Swap
   ;[rtA, rtB] = [rtB, rtA]
 
-  // --- UPDATE MAIN MATERIAL ---
+  // Main material
   icoMaterial.uniforms.uTime.value = t
   icoMaterial.uniforms.uFluid.value = rtA.texture
-  icoMaterial.uniforms.uAudioLevel.value = audioLevel
-  icoMaterial.uniforms.uBassLevel.value = bassLevel
-  icoMaterial.uniforms.uTrebleLevel.value = trebleLevel
+  icoMaterial.uniforms.uAudio.value = audioLevel
+  icoMaterial.uniforms.uBass.value = bassLevel
+  icoMaterial.uniforms.uTreble.value = trebleLevel
 
-  // Slow rotation
-  icoMesh.rotation.y = t * 0.15 + audioLevel * 0.5
-  icoMesh.rotation.x = Math.sin(t * 0.1) * 0.3
+  // Rotation
+  mesh.rotation.y = t * 0.12 + bassLevel * 0.3
+  mesh.rotation.x = Math.sin(t * 0.08) * 0.2
 
-  // Audio-reactive bloom + chromatic
-  bloom.intensity = 1.2 + bassLevel * 2.0
-  chromatic.offset.set(0.001 + trebleLevel * 0.004, 0.001 + trebleLevel * 0.004)
+  // Audio-reactive post
+  bloom.intensity = 1.5 + bassLevel * 2.5
+  chromatic.offset.set(0.0008 + trebleLevel * 0.005, 0.0008 + trebleLevel * 0.005)
 
-  // Color shift over time
-  const hue = (t * 0.02) % 1
-  icoMaterial.uniforms.uColor1.value.setHSL(hue, 0.8, 0.5)
-  icoMaterial.uniforms.uColor2.value.setHSL((hue + 0.33) % 1, 0.7, 0.4)
-  icoMaterial.uniforms.uColor3.value.setHSL((hue + 0.66) % 1, 0.9, 0.6)
-
-  // --- RENDER ---
   composer.render()
+  clickImpulse *= 0.9 // decay
 }
 
 // ============================================
@@ -531,7 +471,6 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix()
   renderer.setSize(window.innerWidth, window.innerHeight)
   composer.setSize(window.innerWidth, window.innerHeight)
-  ditherPostMaterial.uniforms.uResolution.value.set(window.innerWidth, window.innerHeight)
 })
 
 animate()

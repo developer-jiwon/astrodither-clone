@@ -3,19 +3,32 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AstroDither Clone</title>
+  <title>BreadDither — 빵디더</title>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 </head>
 <body>
   <canvas id="c"></canvas>
-  <div id="ui">
-    <div id="title">ASTRODITHER</div>
-    <div id="controls">
-      <button id="btn-mic">mic</button>
-      <button id="btn-audio">play audio</button>
-    </div>
-    <div id="info">move mouse · click for impulse</div>
+
+  <!-- Click overlay -->
+  <div id="enter-overlay">
+    <div class="enter-text">[:: CLICK TO ENTER ::]</div>
+    <div class="enter-sub">audio will be enabled</div>
   </div>
+
+  <div id="ui">
+    <div id="top-left">
+      <div id="title">BREAD DITHER</div>
+      <div id="subtitle">[SIGNAL. LOST. BREAD. FOUND.]</div>
+    </div>
+    <div id="top-right">
+      <div id="mode-label">MODE</div>
+      <button id="btn-bread" class="mode-btn active">bread</button>
+      <button id="btn-flower" class="mode-btn">flower</button>
+      <button id="btn-pixel" class="mode-btn">pixel</button>
+    </div>
+    <div id="bottom">move mouse · click for impulse</div>
+  </div>
+
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>
