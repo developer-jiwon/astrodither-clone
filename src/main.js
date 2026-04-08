@@ -16,7 +16,7 @@ const scene = new THREE.Scene()
 scene.background = new THREE.Color(0x020202)
 
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 100)
-camera.position.z = 3.5
+camera.position.z = 6
 
 // ============================================
 // DITHER MODE — bread / flower / pixel
@@ -273,7 +273,7 @@ fluidScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), fluidMat))
 // ============================================
 // MAIN SPHERE — dark moody with custom dither
 // ============================================
-const geo = new THREE.IcosahedronGeometry(1.4, 80)
+const geo = new THREE.IcosahedronGeometry(1.2, 60)
 
 const icoMaterial = new THREE.ShaderMaterial({
   uniforms: {
@@ -324,9 +324,9 @@ const icoMaterial = new THREE.ShaderMaterial({
       vUv=uv; vNorm=normal;
       float t=uTime*0.25;
       vec3 np=position*1.2+t;
-      float d=snoise(np)*0.35+snoise(np*2.0+100.0)*0.18+snoise(np*4.0+200.0)*0.09;
-      d*=1.0+uBass*1.8;
-      d+=uAudio*0.12;
+      float d=snoise(np)*0.2+snoise(np*2.0+100.0)*0.1+snoise(np*4.0+200.0)*0.05;
+      d*=1.0+uBass*0.8;
+      d+=uAudio*0.06;
       vec4 fl=texture2D(uFluid,uv);
       d+=fl.z*0.25;
       vDisp=d;
@@ -343,38 +343,51 @@ const icoMaterial = new THREE.ShaderMaterial({
     varying vec3 vNorm, vPos;
     varying float vDisp;
 
+    // 8x8 Bayer matrix — proper ordered dithering
+    float bayer8(vec2 p) {
+      vec2 P = mod(p, 8.0);
+      float x = P.x, y = P.y;
+      // Recursive Bayer pattern
+      float v = 0.0;
+      v += step(4.0, mod(x, 8.0)) * 32.0;
+      v += step(4.0, mod(y, 8.0)) * 16.0;
+      v += step(2.0, mod(x, 4.0)) * 8.0;
+      v += step(2.0, mod(y, 4.0)) * 4.0;
+      v += step(1.0, mod(x, 2.0)) * 2.0;
+      v += step(1.0, mod(y, 2.0)) * 1.0;
+      return v / 64.0;
+    }
+
     void main(){
-      vec3 viewDir=normalize(cameraPosition-vPos);
-      float fresnel=pow(1.0-max(dot(viewDir,vNorm),0.0),3.0);
+      vec3 viewDir = normalize(cameraPosition - vPos);
+      float fresnel = pow(1.0 - max(dot(viewDir, vNorm), 0.0), 2.5);
 
-      // Monochrome brightness — keep it dark
-      float brightness=0.05+abs(vDisp)*0.8;
-      brightness+=fresnel*0.2;
-      brightness+=uAudio*0.08;
-      brightness=clamp(brightness, 0.0, 0.7); // cap brightness
+      // === DARK MONOCHROME BRIGHTNESS ===
+      float light = max(dot(vNorm, normalize(vec3(1.0, 1.0, 0.5))), 0.0);
+      float brightness = light * 0.4 + 0.05;
+      brightness += abs(vDisp) * 0.3;
+      brightness += fresnel * 0.15;
+      brightness += uAudio * 0.05;
+      brightness = clamp(brightness, 0.0, 0.6);
 
-      // === CUSTOM SHAPE DITHERING (fine grid) ===
-      vec2 screenUv=gl_FragCoord.xy/4.0; // smaller tile = finer pattern
-      float ditherSample=texture2D(uDitherTex, screenUv).r;
+      // === BAYER DITHERING (screen-space pixels) ===
+      float bayer = bayer8(gl_FragCoord.xy);
 
-      // Soft dithering: mix instead of hard step
-      float dithered=smoothstep(ditherSample*0.6-0.05, ditherSample*0.6+0.05, brightness);
+      // Hard threshold = visible dot pattern
+      float dithered = step(bayer, brightness);
 
-      // Tint: subtle cool/warm
-      vec3 coolColor=vec3(0.5, 0.6, 0.8);
-      vec3 warmColor=vec3(0.7, 0.6, 0.5);
-      vec3 tint=mix(coolColor, warmColor, smoothstep(-0.1, 0.2, vDisp));
+      // === COLOR ===
+      // Very muted, almost monochrome with subtle tint
+      vec3 baseColor = vec3(0.75, 0.8, 0.85); // cool grey
+      vec3 warmTint = vec3(0.85, 0.78, 0.7);  // warm grey
+      vec3 tint = mix(baseColor, warmTint, smoothstep(-0.1, 0.15, vDisp));
 
-      vec3 col=tint*dithered*0.8;
+      vec3 col = tint * dithered * 0.5;
 
-      // Subtle emission only on peaks
-      float emission=smoothstep(0.4, 0.7, abs(vDisp))*0.2;
-      col+=tint*emission;
+      // Fresnel rim — very subtle
+      col += vec3(0.2, 0.25, 0.35) * fresnel * dithered * 0.3;
 
-      // Subtle fresnel rim
-      col+=vec3(0.3, 0.4, 0.6)*fresnel*0.25*dithered;
-
-      gl_FragColor=vec4(col, 1.0);
+      gl_FragColor = vec4(col, 1.0);
     }
   `,
 })
