@@ -347,34 +347,32 @@ const icoMaterial = new THREE.ShaderMaterial({
       vec3 viewDir=normalize(cameraPosition-vPos);
       float fresnel=pow(1.0-max(dot(viewDir,vNorm),0.0),3.0);
 
-      // Monochrome color from displacement
-      float brightness=0.15+abs(vDisp)*1.8;
-      brightness+=fresnel*0.4;
-      brightness+=uAudio*0.15;
+      // Monochrome brightness — keep it dark
+      float brightness=0.05+abs(vDisp)*0.8;
+      brightness+=fresnel*0.2;
+      brightness+=uAudio*0.08;
+      brightness=clamp(brightness, 0.0, 0.7); // cap brightness
 
-      // Clamp to dark range
-      brightness=clamp(brightness, 0.0, 1.0);
-
-      // === CUSTOM SHAPE DITHERING ===
-      vec2 screenUv=gl_FragCoord.xy/8.0; // tile size
+      // === CUSTOM SHAPE DITHERING (fine grid) ===
+      vec2 screenUv=gl_FragCoord.xy/4.0; // smaller tile = finer pattern
       float ditherSample=texture2D(uDitherTex, screenUv).r;
 
-      // Threshold with dither pattern
-      float dithered=step(ditherSample*0.8, brightness);
+      // Soft dithering: mix instead of hard step
+      float dithered=smoothstep(ditherSample*0.6-0.05, ditherSample*0.6+0.05, brightness);
 
-      // Tint: subtle cool/warm based on displacement
-      vec3 coolColor=vec3(0.6, 0.7, 0.9); // blue-white
-      vec3 warmColor=vec3(0.9, 0.75, 0.6); // warm cream
-      vec3 tint=mix(coolColor, warmColor, smoothstep(-0.2, 0.3, vDisp));
+      // Tint: subtle cool/warm
+      vec3 coolColor=vec3(0.5, 0.6, 0.8);
+      vec3 warmColor=vec3(0.7, 0.6, 0.5);
+      vec3 tint=mix(coolColor, warmColor, smoothstep(-0.1, 0.2, vDisp));
 
-      vec3 col=tint*dithered;
+      vec3 col=tint*dithered*0.8;
 
-      // Emission for bright peaks
-      float emission=smoothstep(0.3, 0.6, abs(vDisp));
-      col+=tint*emission*0.3;
+      // Subtle emission only on peaks
+      float emission=smoothstep(0.4, 0.7, abs(vDisp))*0.2;
+      col+=tint*emission;
 
-      // Fresnel rim glow
-      col+=vec3(0.4, 0.5, 0.8)*fresnel*0.5*dithered;
+      // Subtle fresnel rim
+      col+=vec3(0.3, 0.4, 0.6)*fresnel*0.25*dithered;
 
       gl_FragColor=vec4(col, 1.0);
     }
@@ -391,9 +389,9 @@ const composer = new EffectComposer(renderer)
 composer.addPass(new RenderPass(scene, camera))
 
 const bloom = new BloomEffect({
-  intensity: 1.8,
-  luminanceThreshold: 0.15,
-  luminanceSmoothing: 0.4,
+  intensity: 0.6,
+  luminanceThreshold: 0.8,
+  luminanceSmoothing: 0.7,
   mipmapBlur: true,
 })
 const chromatic = new ChromaticAberrationEffect({
@@ -401,7 +399,7 @@ const chromatic = new ChromaticAberrationEffect({
   radialModulation: true,
   modulationOffset: 0.3,
 })
-const vignette = new VignetteEffect({ darkness: 0.7, offset: 0.25 })
+const vignette = new VignetteEffect({ darkness: 0.5, offset: 0.3 })
 
 composer.addPass(new EffectPass(camera, bloom, chromatic, vignette))
 
@@ -456,7 +454,7 @@ function animate() {
   mesh.rotation.x = Math.sin(t * 0.08) * 0.2
 
   // Audio-reactive post
-  bloom.intensity = 1.5 + bassLevel * 2.5
+  bloom.intensity = 0.4 + bassLevel * 0.6
   chromatic.offset.set(0.0008 + trebleLevel * 0.005, 0.0008 + trebleLevel * 0.005)
 
   composer.render()
